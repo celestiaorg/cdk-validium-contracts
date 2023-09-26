@@ -84,6 +84,7 @@ async function main() {
         maticTokenAddress,
         setupEmptyCommittee,
         committeeTimelock,
+        celestium,
     } = deployParameters;
 
     // Load provider
@@ -393,111 +394,216 @@ async function main() {
     console.log('networkName:', networkName);
     console.log('forkID:', forkID);
 
-    const CDKValidiumFactory = await ethers.getContractFactory('CDKValidium', deployer);
-
     let cdkValidiumContract;
     let deploymentBlockNumber;
-    if (!ongoingDeployment.cdkValidiumContract) {
-        for (let i = 0; i < attemptsDeployProxy; i++) {
-            try {
-                cdkValidiumContract = await upgrades.deployProxy(
-                    CDKValidiumFactory,
-                    [
-                        {
-                            admin,
-                            trustedSequencer,
-                            pendingStateTimeout,
-                            trustedAggregator,
-                            trustedAggregatorTimeout,
-                        },
-                        genesisRootHex,
-                        trustedSequencerURL,
-                        networkName,
-                        version,
-                    ],
-                    {
-                        constructorArgs: [
-                            PolygonZkEVMGlobalExitRoot.address,
-                            maticTokenAddress,
-                            verifierContract.address,
-                            PolygonZkEVMBridgeContract.address,
-                            cdkDataCommitteeContract.address,
-                            chainID,
-                            forkID,
+    if (celestium) {
+        const CDKCelestiumFactory = await ethers.getContractFactory('CDKCelestium', deployer);
+
+        if (!ongoingDeployment.cdkValidiumContract) {
+            for (let i = 0; i < attemptsDeployProxy; i++) {
+                try {
+                    cdkValidiumContract = await upgrades.deployProxy(
+                        CDKCelestiumFactory,
+                        [
+                            {
+                                admin,
+                                trustedSequencer,
+                                pendingStateTimeout,
+                                trustedAggregator,
+                                trustedAggregatorTimeout,
+                            },
+                            genesisRootHex,
+                            trustedSequencerURL,
+                            networkName,
+                            version,
                         ],
-                        unsafeAllow: ['constructor', 'state-variable-immutable'],
-                    },
-                );
-                break;
-            } catch (error) {
-                console.log(`attempt ${i}`);
-                console.log('upgrades.deployProxy of cdkValidiumContract ', error.message);
+                        {
+                            constructorArgs: [
+                                PolygonZkEVMGlobalExitRoot.address,
+                                maticTokenAddress,
+                                verifierContract.address,
+                                PolygonZkEVMBridgeContract.address,
+                                chainID,
+                                forkID,
+                            ],
+                            unsafeAllow: ['constructor', 'state-variable-immutable'],
+                        },
+                    );
+                    break;
+                } catch (error) {
+                    console.log(`attempt ${i}`);
+                    console.log('upgrades.deployProxy of cdkCelestiumContract ', error.message);
+                }
+
+                // reach limits of attempts
+                if (i + 1 === attemptsDeployProxy) {
+                    throw new Error('CDKCelestium contract has not been deployed');
+                }
             }
 
-            // reach limits of attempts
-            if (i + 1 === attemptsDeployProxy) {
-                throw new Error('CDKValidium contract has not been deployed');
+            expect(precalculateCDKValidiumAddress).to.be.equal(cdkValidiumContract.address);
+
+            console.log('#######################\n');
+            console.log('cdkCelestiumContract deployed to:', cdkValidiumContract.address);
+
+            // save an ongoing deployment
+            ongoingDeployment.cdkValidiumContract = cdkValidiumContract.address;
+            fs.writeFileSync(pathOngoingDeploymentJson, JSON.stringify(ongoingDeployment, null, 1));
+
+            // Transfer ownership of cdkCelestiumContract
+            if (cdkValidiumOwner !== deployer.address) {
+                await (await cdkValidiumContract.transferOwnership(cdkValidiumOwner)).wait();
             }
+
+            deploymentBlockNumber = (await cdkValidiumContract.deployTransaction.wait()).blockNumber;
+        } else {
+            // Expect the precalculate address matches de onogin deployment, sanity check
+            expect(precalculateCDKValidiumAddress).to.be.equal(ongoingDeployment.cdkValidiumContract);
+            cdkValidiumContract = CDKCelestiumFactory.attach(ongoingDeployment.cdkValidiumContract);
+
+            console.log('#######################\n');
+            console.log('cdkCelestiumContract already deployed on: ', ongoingDeployment.cdkValidiumContract);
+
+            // Import OZ manifest the deployed contracts, its enough to import just the proyx, the rest are imported automatically ( admin/impl)
+            await upgrades.forceImport(ongoingDeployment.cdkValidiumContract, CDKCelestiumFactory, 'transparent');
+
+            const cdkValidiumOwnerContract = await cdkValidiumContract.owner();
+            if (cdkValidiumOwnerContract === deployer.address) {
+                // Transfer ownership of cdkCelestiumContract
+                if (cdkValidiumOwner !== deployer.address) {
+                    await (await cdkValidiumContract.transferOwnership(cdkValidiumOwner)).wait();
+                }
+            } else {
+                expect(cdkValidiumOwner).to.be.equal(cdkValidiumContract);
+            }
+            deploymentBlockNumber = 0;
         }
 
-        expect(precalculateCDKValidiumAddress).to.be.equal(cdkValidiumContract.address);
+        console.log('\n#######################');
+        console.log('#####    Checks  CDKValidium  #####');
+        console.log('#######################');
+        console.log('PolygonZkEVMGlobalExitRootAddress:', await cdkValidiumContract.globalExitRootManager());
+        console.log('maticTokenAddress:', await cdkValidiumContract.matic());
+        console.log('verifierAddress:', await cdkValidiumContract.rollupVerifier());
+        console.log('PolygonZkEVMBridgeContract:', await cdkValidiumContract.bridgeAddress());
 
-        console.log('#######################\n');
-        console.log('cdkValidiumContract deployed to:', cdkValidiumContract.address);
+        console.log('admin:', await cdkValidiumContract.admin());
+        console.log('chainID:', await cdkValidiumContract.chainID());
+        console.log('trustedSequencer:', await cdkValidiumContract.trustedSequencer());
+        console.log('pendingStateTimeout:', await cdkValidiumContract.pendingStateTimeout());
+        console.log('trustedAggregator:', await cdkValidiumContract.trustedAggregator());
+        console.log('trustedAggregatorTimeout:', await cdkValidiumContract.trustedAggregatorTimeout());
 
-        // save an ongoing deployment
-        ongoingDeployment.cdkValidiumContract = cdkValidiumContract.address;
-        fs.writeFileSync(pathOngoingDeploymentJson, JSON.stringify(ongoingDeployment, null, 1));
-
-        // Transfer ownership of cdkValidiumContract
-        if (cdkValidiumOwner !== deployer.address) {
-            await (await cdkValidiumContract.transferOwnership(cdkValidiumOwner)).wait();
-        }
-
-        deploymentBlockNumber = (await cdkValidiumContract.deployTransaction.wait()).blockNumber;
+        console.log('genesiRoot:', await cdkValidiumContract.batchNumToStateRoot(0));
+        console.log('trustedSequencerURL:', await cdkValidiumContract.trustedSequencerURL());
+        console.log('networkName:', await cdkValidiumContract.networkName());
+        console.log('owner:', await cdkValidiumContract.owner());
+        console.log('forkID:', await cdkValidiumContract.forkID());
     } else {
-        // Expect the precalculate address matches de onogin deployment, sanity check
-        expect(precalculateCDKValidiumAddress).to.be.equal(ongoingDeployment.cdkValidiumContract);
-        cdkValidiumContract = CDKValidiumFactory.attach(ongoingDeployment.cdkValidiumContract);
+        const CDKValidiumFactory = await ethers.getContractFactory('CDKValidium', deployer);
 
-        console.log('#######################\n');
-        console.log('cdkValidiumContract already deployed on: ', ongoingDeployment.cdkValidiumContract);
+        if (!ongoingDeployment.cdkValidiumContract) {
+            for (let i = 0; i < attemptsDeployProxy; i++) {
+                try {
+                    cdkValidiumContract = await upgrades.deployProxy(
+                        CDKValidiumFactory,
+                        [
+                            {
+                                admin,
+                                trustedSequencer,
+                                pendingStateTimeout,
+                                trustedAggregator,
+                                trustedAggregatorTimeout,
+                            },
+                            genesisRootHex,
+                            trustedSequencerURL,
+                            networkName,
+                            version,
+                        ],
+                        {
+                            constructorArgs: [
+                                PolygonZkEVMGlobalExitRoot.address,
+                                maticTokenAddress,
+                                verifierContract.address,
+                                PolygonZkEVMBridgeContract.address,
+                                cdkDataCommitteeContract.address,
+                                chainID,
+                                forkID,
+                            ],
+                            unsafeAllow: ['constructor', 'state-variable-immutable'],
+                        },
+                    );
+                    break;
+                } catch (error) {
+                    console.log(`attempt ${i}`);
+                    console.log('upgrades.deployProxy of cdkValidiumContract ', error.message);
+                }
 
-        // Import OZ manifest the deployed contracts, its enough to import just the proyx, the rest are imported automatically ( admin/impl)
-        await upgrades.forceImport(ongoingDeployment.cdkValidiumContract, CDKValidiumFactory, 'transparent');
+                // reach limits of attempts
+                if (i + 1 === attemptsDeployProxy) {
+                    throw new Error('CDKValidium contract has not been deployed');
+                }
+            }
 
-        const cdkValidiumOwnerContract = await cdkValidiumContract.owner();
-        if (cdkValidiumOwnerContract === deployer.address) {
+            expect(precalculateCDKValidiumAddress).to.be.equal(cdkValidiumContract.address);
+
+            console.log('#######################\n');
+            console.log('cdkValidiumContract deployed to:', cdkValidiumContract.address);
+
+            // save an ongoing deployment
+            ongoingDeployment.cdkValidiumContract = cdkValidiumContract.address;
+            fs.writeFileSync(pathOngoingDeploymentJson, JSON.stringify(ongoingDeployment, null, 1));
+
             // Transfer ownership of cdkValidiumContract
             if (cdkValidiumOwner !== deployer.address) {
                 await (await cdkValidiumContract.transferOwnership(cdkValidiumOwner)).wait();
             }
+
+            deploymentBlockNumber = (await cdkValidiumContract.deployTransaction.wait()).blockNumber;
         } else {
-            expect(cdkValidiumOwner).to.be.equal(cdkValidiumOwnerContract);
+            // Expect the precalculate address matches de onogin deployment, sanity check
+            expect(precalculateCDKValidiumAddress).to.be.equal(ongoingDeployment.cdkValidiumContract);
+            cdkValidiumContract = CDKValidiumFactory.attach(ongoingDeployment.cdkValidiumContract);
+
+            console.log('#######################\n');
+            console.log('cdkValidiumContract already deployed on: ', ongoingDeployment.cdkValidiumContract);
+
+            // Import OZ manifest the deployed contracts, its enough to import just the proyx, the rest are imported automatically ( admin/impl)
+            await upgrades.forceImport(ongoingDeployment.cdkValidiumContract, CDKValidiumFactory, 'transparent');
+
+            const cdkValidiumOwnerContract = await cdkValidiumContract.owner();
+            if (cdkValidiumOwnerContract === deployer.address) {
+                // Transfer ownership of cdkValidiumContract
+                if (cdkValidiumOwner !== deployer.address) {
+                    await (await cdkValidiumContract.transferOwnership(cdkValidiumOwner)).wait();
+                }
+            } else {
+                expect(cdkValidiumOwner).to.be.equal(cdkValidiumOwnerContract);
+            }
+            deploymentBlockNumber = 0;
         }
-        deploymentBlockNumber = 0;
+
+        console.log('\n#######################');
+        console.log('#####    Checks  CDKValidium  #####');
+        console.log('#######################');
+        console.log('PolygonZkEVMGlobalExitRootAddress:', await cdkValidiumContract.globalExitRootManager());
+        console.log('maticTokenAddress:', await cdkValidiumContract.matic());
+        console.log('verifierAddress:', await cdkValidiumContract.rollupVerifier());
+        console.log('PolygonZkEVMBridgeContract:', await cdkValidiumContract.bridgeAddress());
+
+        console.log('admin:', await cdkValidiumContract.admin());
+        console.log('chainID:', await cdkValidiumContract.chainID());
+        console.log('trustedSequencer:', await cdkValidiumContract.trustedSequencer());
+        console.log('pendingStateTimeout:', await cdkValidiumContract.pendingStateTimeout());
+        console.log('trustedAggregator:', await cdkValidiumContract.trustedAggregator());
+        console.log('trustedAggregatorTimeout:', await cdkValidiumContract.trustedAggregatorTimeout());
+
+        console.log('genesiRoot:', await cdkValidiumContract.batchNumToStateRoot(0));
+        console.log('trustedSequencerURL:', await cdkValidiumContract.trustedSequencerURL());
+        console.log('networkName:', await cdkValidiumContract.networkName());
+        console.log('owner:', await cdkValidiumContract.owner());
+        console.log('forkID:', await cdkValidiumContract.forkID());
     }
-
-    console.log('\n#######################');
-    console.log('#####    Checks  CDKValidium  #####');
-    console.log('#######################');
-    console.log('PolygonZkEVMGlobalExitRootAddress:', await cdkValidiumContract.globalExitRootManager());
-    console.log('maticTokenAddress:', await cdkValidiumContract.matic());
-    console.log('verifierAddress:', await cdkValidiumContract.rollupVerifier());
-    console.log('PolygonZkEVMBridgeContract:', await cdkValidiumContract.bridgeAddress());
-
-    console.log('admin:', await cdkValidiumContract.admin());
-    console.log('chainID:', await cdkValidiumContract.chainID());
-    console.log('trustedSequencer:', await cdkValidiumContract.trustedSequencer());
-    console.log('pendingStateTimeout:', await cdkValidiumContract.pendingStateTimeout());
-    console.log('trustedAggregator:', await cdkValidiumContract.trustedAggregator());
-    console.log('trustedAggregatorTimeout:', await cdkValidiumContract.trustedAggregatorTimeout());
-
-    console.log('genesiRoot:', await cdkValidiumContract.batchNumToStateRoot(0));
-    console.log('trustedSequencerURL:', await cdkValidiumContract.trustedSequencerURL());
-    console.log('networkName:', await cdkValidiumContract.networkName());
-    console.log('owner:', await cdkValidiumContract.owner());
-    console.log('forkID:', await cdkValidiumContract.forkID());
 
     // Assert admin address
     expect(await upgrades.erc1967.getAdminAddress(precalculateCDKValidiumAddress)).to.be.equal(proxyAdminAddress);

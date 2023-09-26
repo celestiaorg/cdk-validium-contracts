@@ -8,7 +8,6 @@ import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import "./interfaces/IPolygonZkEVMBridge.sol";
 import "./lib/EmergencyManager.sol";
 import "./interfaces/ICDKValidiumErrors.sol";
-import "./interfaces/ICDKDataCommittee.sol";
 
 /**
  * Contract responsible for managing the states and the updates of L2 network.
@@ -18,7 +17,7 @@ import "./interfaces/ICDKDataCommittee.sol";
  * The aggregators will be able to verify the sequenced state with zkProofs and therefore make available the withdrawals from L2 network.
  * To enter and exit of the L2 network will be used a PolygonZkEVMBridge smart contract that will be deployed in both networks.
  */
-contract CDKValidium is
+contract CDKCelestium is
     OwnableUpgradeable,
     EmergencyManager,
     ICDKValidiumErrors
@@ -156,9 +155,6 @@ contract CDKValidium is
 
     // PolygonZkEVM Bridge Address
     IPolygonZkEVMBridge public immutable bridgeAddress;
-
-    // CDK Data Committee Address
-    ICDKDataCommittee public immutable dataCommitteeAddress;
 
     // L2 chain identifier
     uint64 public immutable chainID;
@@ -376,7 +372,6 @@ contract CDKValidium is
      * @param _matic MATIC token address
      * @param _rollupVerifier Rollup verifier address
      * @param _bridgeAddress Bridge address
-     * @param _dataCommitteeAddress Data committee address
      * @param _chainID L2 chainID
      * @param _forkID Fork Id
      */
@@ -385,7 +380,6 @@ contract CDKValidium is
         IERC20Upgradeable _matic,
         IVerifierRollup _rollupVerifier,
         IPolygonZkEVMBridge _bridgeAddress,
-        ICDKDataCommittee _dataCommitteeAddress,
         uint64 _chainID,
         uint64 _forkID
     ) {
@@ -393,7 +387,6 @@ contract CDKValidium is
         matic = _matic;
         rollupVerifier = _rollupVerifier;
         bridgeAddress = _bridgeAddress;
-        dataCommitteeAddress = _dataCommitteeAddress;
         chainID = _chainID;
         forkID = _forkID;
     }
@@ -487,14 +480,11 @@ contract CDKValidium is
      * @notice Allows a sequencer to send multiple batches
      * @param batches Struct array which holds the necessary data to append new batches to the sequence
      * @param l2Coinbase Address that will receive the fees from L2
-     * @param message Byte array containing the signatures and all the addresses of the committee in ascending order
-     * [signature 0, ..., signature requiredAmountOfSignatures -1, address 0, ... address N]
-     * note that each ECDSA signatures are used, therefore each one must be 65 bytes
      */
     function sequenceBatches(
         BatchData[] calldata batches,
         address l2Coinbase,
-        bytes calldata message
+        bytes calldata _message
     ) external ifNotEmergencyState onlyTrustedSequencer {
         uint256 batchesNum = batches.length;
         if (batchesNum == 0) {
@@ -583,8 +573,7 @@ contract CDKValidium is
             currentTimestamp = currentBatch.timestamp;
         }
 
-        // Validate that the data committee has signed the accInputHash for this sequence
-        dataCommitteeAddress.verifySignatures(currentAccInputHash, message);
+        // (Diego) Removed DAC verification, need to replace with blob inclusion / QGB?
 
         // Update currentBatchSequenced
         currentBatchSequenced += uint64(batchesNum);
